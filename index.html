@@ -23,7 +23,6 @@
     --gold-light:#fef5e7;
     --danger:#e74c3c;
     --danger-light:#fdeaea;
-    --radius:14px;
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
   body{
@@ -494,11 +493,54 @@
   var activeChannels = {};
   Object.keys(CHANNELS).forEach(function(k){ activeChannels[k] = true; });
 
+  // ============================================================
+  // CORREÇÃO: Normaliza datas vindas do Google Sheets
+  // Aceita: "2026-10-14", "2026-10-14T00:00:00.000Z", "14/10/2026", etc.
+  // Retorna sempre: "YYYY-MM-DD"
+  // ============================================================
+  function normalizeDate(s){
+    if(!s) return '';
+    s = String(s).trim();
+
+    // Já está no formato YYYY-MM-DD
+    if(/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+
+    // Formato ISO completo: 2026-10-14T00:00:00.000Z
+    var m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if(m) return m[1] + '-' + m[2] + '-' + m[3];
+
+    // Formato brasileiro: 14/10/2026 ou 14/10/26
+    m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+    if(m){
+      var dia = pad(m[1]);
+      var mes = pad(m[2]);
+      var ano = m[3].length === 2 ? '20' + m[3] : m[3];
+      return ano + '-' + mes + '-' + dia;
+    }
+
+    // Tenta criar um Date e extrair
+    var d = new Date(s);
+    if(!isNaN(d.getTime())){
+      return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate());
+    }
+
+    return s; // retorna como está se não conseguir normalizar
+  }
+
   function pad(n){ return String(n).padStart(2,'0'); }
   function iso(d){ return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()); }
-  function parseISO(s){ var p = s.split('-'); return new Date(Number(p[0]), Number(p[1])-1, Number(p[2])); }
+  function parseISO(s){
+    var norm = normalizeDate(s);
+    var p = norm.split('-');
+    return new Date(Number(p[0]), Number(p[1])-1, Number(p[2]));
+  }
   function addDays(d, n){ var x = new Date(d); x.setDate(x.getDate()+n); return x; }
-  function fmtDate(s){ if(!s) return ''; var p = s.split('-'); return p[2] + '/' + p[1] + '/' + p[0]; }
+  function fmtDate(s){
+    if(!s) return '';
+    var norm = normalizeDate(s);
+    var p = norm.split('-');
+    return p[2] + '/' + p[1] + '/' + p[0];
+  }
   function escapeHTML(s){ return String(s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
   function hexToRgba(hex, a){
     var h = String(hex).replace('#','');
@@ -506,11 +548,39 @@
     return 'rgba(' + parseInt(h.slice(0,2),16) + ',' + parseInt(h.slice(2,4),16) + ',' + parseInt(h.slice(4,6),16) + ',' + a + ')';
   }
   function fmtBRL(n){ return 'R$ ' + Number(n || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
-  function diffDays(a, b){ return Math.round((parseISO(b) - parseISO(a)) / 86400000); }
+  function diffDays(a, b){
+    var na = normalizeDate(a);
+    var nb = normalizeDate(b);
+    return Math.round((parseISO(nb) - parseISO(na)) / 86400000);
+  }
   function firstName(n){ var p = String(n).trim().split(' '); return p[0]; }
   function $(id){ return document.getElementById(id); }
 
-  function resOnDate(r, dateStr){ return r.checkIn <= dateStr && dateStr < r.checkOut; }
+  // ============================================================
+  // CORREÇÃO: Normaliza uma reserva inteira (datas + campos)
+  // ============================================================
+  function normalizeReserva(r){
+    if(!r) return r;
+    return {
+      id: r.id || '',
+      guestName: String(r.guestName || ''),
+      checkIn: normalizeDate(r.checkIn),
+      checkOut: normalizeDate(r.checkOut),
+      suiteId: r.suiteId || '',
+      guests: Number(r.guests) || 1,
+      reservationNumber: String(r.reservationNumber || ''),
+      channel: r.channel || 'outro',
+      notes: String(r.notes || ''),
+      total: Number(r.total) || 0,
+      createdAt: r.createdAt || ''
+    };
+  }
+
+  function resOnDate(r, dateStr){
+    var ci = normalizeDate(r.checkIn);
+    var co = normalizeDate(r.checkOut);
+    return ci <= dateStr && dateStr < co;
+  }
   function visibleReservas(){
     return reservas.filter(function(r){ return activeChannels[r.channel || 'outro'] !== false; });
   }
@@ -540,7 +610,10 @@
       .then(function(data){
         showLoading(false);
         if(data && data.success){
-          reservas = Array.isArray(data.reservas) ? data.reservas : [];
+          // CORREÇÃO: Normaliza todas as reservas ao carregar
+          var rawReservas = Array.isArray(data.reservas) ? data.reservas : [];
+          reservas = rawReservas.map(normalizeReserva);
+
           suites = Array.isArray(data.suites) ? data.suites : [];
           if(suites.length === 0){
             suites = [
@@ -549,7 +622,7 @@
             ];
             save();
           }
-          setSyncStatus('✓ Sincronizado', true);
+          setSyncStatus('✓ Sincronizado (' + reservas.length + ' reservas)', true);
         } else {
           setSyncStatus('✗ Erro ao carregar', false);
         }
@@ -566,10 +639,12 @@
   function save(){
     showLoading(true);
     setSyncStatus('Salvando…', null);
+    // CORREÇÃO: Garante que todas as reservas estão normalizadas antes de enviar
+    var reservasNorm = reservas.map(normalizeReserva);
     fetch(API_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action: 'sync', reservas: reservas, suites: suites })
+      body: JSON.stringify({ action: 'sync', reservas: reservasNorm, suites: suites })
     })
     .then(function(r){ return r.json(); })
     .then(function(data){
@@ -614,7 +689,9 @@
     var occupied = {};
     var inMonth = 0;
     list.forEach(function(r){
-      var overlap = r.checkIn < iso(new Date(viewYear, viewMonth+1, 1)) && r.checkOut > iso(new Date(viewYear, viewMonth, 1));
+      var ci = normalizeDate(r.checkIn);
+      var co = normalizeDate(r.checkOut);
+      var overlap = ci < iso(new Date(viewYear, viewMonth+1, 1)) && co > iso(new Date(viewYear, viewMonth, 1));
       if(overlap) inMonth++;
       for(var d=1; d<=daysInMonth; d++){
         var ds = iso(new Date(viewYear, viewMonth, d));
@@ -646,7 +723,9 @@
   function channelsOnDate(dateStr){
     var set = [];
     visibleReservas().forEach(function(r){
-      if((r.checkIn <= dateStr && dateStr < r.checkOut) || r.checkOut === dateStr){
+      var ci = normalizeDate(r.checkIn);
+      var co = normalizeDate(r.checkOut);
+      if((ci <= dateStr && dateStr < co) || co === dateStr){
         var k = r.channel || 'outro';
         if(set.indexOf(k) === -1) set.push(k);
       }
@@ -664,8 +743,8 @@
     for(var d=1; d<=days; d++){
       var dateStr = iso(new Date(viewYear, viewMonth, d));
       var occupied = reservationsOnDate(dateStr);
-      var checkIns = visibleReservas().filter(function(r){ return r.checkIn === dateStr; });
-      var checkOuts = visibleReservas().filter(function(r){ return r.checkOut === dateStr; });
+      var checkIns = visibleReservas().filter(function(r){ return normalizeDate(r.checkIn) === dateStr; });
+      var checkOuts = visibleReservas().filter(function(r){ return normalizeDate(r.checkOut) === dateStr; });
       var isOccupied = occupied.length > 0;
       var isToday = dateStr === todayStr;
       var isSelected = dateStr === selectedDate;
@@ -719,16 +798,17 @@
       return String(r.guestName || '').toLowerCase().indexOf(q) !== -1 ||
              String(r.reservationNumber || '').toLowerCase().indexOf(q) !== -1 ||
              String(suiteName || '').toLowerCase().indexOf(q) !== -1;
-    }).sort(function(a,b){ return a.checkIn < b.checkIn ? -1 : 1; });
+    }).sort(function(a,b){ return normalizeDate(a.checkIn) < normalizeDate(b.checkIn) ? -1 : 1; });
 
     if(list.length === 0){
       box.innerHTML = '<div class="empty-state">Nenhuma reserva encontrada.</div>';
       return;
     }
+    // CORREÇÃO: usa fmtDate que agora normaliza antes de formatar
     box.innerHTML = list.map(function(r){
       var ch = CHANNELS[r.channel] || CHANNELS.outro;
       var suiteName = getSuiteName(r.suiteId);
-      var past = r.checkOut < todayStr;
+      var past = normalizeDate(r.checkOut) < todayStr;
       return '<button class="list-item' + (past ? ' past' : '') + '" data-action="edit" data-id="' + r.id + '">' +
         '<span class="res-dot" style="background:' + ch.color + '"></span>' +
         '<div class="info">' +
@@ -766,7 +846,11 @@
     if(!selectedDate) return;
     var d = parseISO(selectedDate);
     $('dayTitle').textContent = d.toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' });
-    var list = visibleReservas().filter(function(r){ return r.checkIn <= selectedDate && selectedDate <= r.checkOut; });
+    var list = visibleReservas().filter(function(r){
+      var ci = normalizeDate(r.checkIn);
+      var co = normalizeDate(r.checkOut);
+      return ci <= selectedDate && selectedDate <= co;
+    });
     var guests = reservationsOnDate(selectedDate).reduce(function(s,r){ return s + (Number(r.guests) || 0); }, 0);
     $('daySub').textContent = guests > 0 ? (guests + ' hóspede(s) no dia · ' + list.length + ' reserva(s)') : '';
     var body = $('dayBody');
@@ -776,10 +860,12 @@
       body.innerHTML = list.map(function(r){
         var ch = CHANNELS[r.channel] || CHANNELS.outro;
         var suiteName = getSuiteName(r.suiteId);
+        var ci = normalizeDate(r.checkIn);
+        var co = normalizeDate(r.checkOut);
         var status, cls;
-        if(r.checkIn === selectedDate && r.checkOut === selectedDate){ status = 'Entrada/Saída'; cls = 'warn'; }
-        else if(r.checkIn === selectedDate){ status = 'Chegada'; cls = 'in'; }
-        else if(r.checkOut === selectedDate){ status = 'Saída'; cls = 'out'; }
+        if(ci === selectedDate && co === selectedDate){ status = 'Entrada/Saída'; cls = 'warn'; }
+        else if(ci === selectedDate){ status = 'Chegada'; cls = 'in'; }
+        else if(co === selectedDate){ status = 'Saída'; cls = 'out'; }
         else { status = 'Hospedado'; cls = 'stay'; }
         return '<button class="res-item" data-action="edit" data-id="' + r.id + '">' +
           '<span class="res-dot" style="background:' + ch.color + '"></span>' +
@@ -848,8 +934,9 @@
       for(var i=0;i<reservas.length;i++){ if(reservas[i].id === id){ r = reservas[i]; break; } }
       if(r){
         $('fGuest').value = r.guestName;
-        $('fCheckin').value = r.checkIn;
-        $('fCheckout').value = r.checkOut;
+        // CORREÇÃO: usa normalizeDate para garantir formato correto no input date
+        $('fCheckin').value = normalizeDate(r.checkIn);
+        $('fCheckout').value = normalizeDate(r.checkOut);
         $('fSuite').value = r.suiteId || '';
         $('fGuests').value = r.guests;
         $('fNum').value = r.reservationNumber || '';
@@ -911,7 +998,17 @@
     var price = getSuitePrice(suiteId);
     var nights = diffDays(checkIn, checkOut);
     var total = price * nights;
-    var dados = { guestName: guest, checkIn: checkIn, checkOut: checkOut, suiteId: suiteId, guests: guests, reservationNumber: num, channel: channel, notes: notes, total: total };
+    var dados = {
+      guestName: guest,
+      checkIn: normalizeDate(checkIn),   // CORREÇÃO: normaliza antes de salvar
+      checkOut: normalizeDate(checkOut), // CORREÇÃO: normaliza antes de salvar
+      suiteId: suiteId,
+      guests: guests,
+      reservationNumber: num,
+      channel: channel,
+      notes: notes,
+      total: total
+    };
 
     if(editingId){
       for(var i=0;i<reservas.length;i++){
@@ -1024,7 +1121,8 @@
         if(!dados || !Array.isArray(dados.reservas)){ throw new Error('inválido'); }
         var qtdS = Array.isArray(dados.suites) ? dados.suites.length : 0;
         if(confirm('Substituir os dados atuais pelos importados (' + dados.reservas.length + ' reserva(s) e ' + qtdS + ' suíte(s))?')){
-          reservas = dados.reservas;
+          // CORREÇÃO: normaliza as reservas importadas
+          reservas = dados.reservas.map(normalizeReserva);
           suites = Array.isArray(dados.suites) ? dados.suites : [];
           save();
           render();
