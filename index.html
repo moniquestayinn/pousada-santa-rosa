@@ -1001,15 +1001,26 @@
     e.style.display = 'block';
   }
 
-  function saveSuiteForm(ev){
+ function saveSuiteForm(ev){
     ev.preventDefault();
     const name = $('sName').value.trim();
     const price = parseFloat($('sPrice').value);
     const capacity = parseInt($('sCapacity').value, 10);
+    const units = parseInt($('sUnits').value, 10);
     const description = $('sDesc').value.trim();
+
     if(!name){ showSuiteFormError('Informe o nome da suíte.'); return; }
     if(isNaN(price) || price < 0){ showSuiteFormError('Informe um preço válido.'); return; }
-    const dados = { name: name, price: price, capacity: capacity || null, description: description };
+    if(isNaN(units) || units < 1){ showSuiteFormError('Informe o número de unidades disponíveis (mínimo 1).'); return; }
+
+    const dados = { 
+      name: name, 
+      price: price, 
+      capacity: capacity || null, 
+      units: units, 
+      description: description 
+    };
+
     if(editingSuiteId){
       for(let i=0;i<suites.length;i++){
         if(suites[i].id === editingSuiteId){
@@ -1018,7 +1029,9 @@
         }
       }
     } else {
-      suites.push(Object.assign({ id: 's' + Date.now() + Math.random().toString(36).slice(2,7) }, dados));
+      suites.push(Object.assign({ 
+        id: 's' + Date.now() + Math.random().toString(36).slice(2,7) 
+      }, dados));
     }
     save();
     $('suiteModal').classList.remove('open');
