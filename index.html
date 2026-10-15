@@ -919,7 +919,7 @@
     e.style.display = 'block';
   }
 
-  function saveForm(ev){
+function saveForm(ev){
     ev.preventDefault();
     const guest = $('fGuest').value.trim();
     const checkIn = $('fCheckin').value;
@@ -936,6 +936,20 @@
     if(!suiteId){ showFormError('Selecione uma suíte (cadastre na aba Suítes).'); return; }
     if(!guests || guests < 1){ showFormError('Informe um número válido de hóspedes.'); return; }
 
+    const suite = getSuite(suiteId);
+
+    // Alerta de capacidade da suíte
+    if(suite && suite.capacity && guests > suite.capacity){
+      const continuar = confirm(
+        `⚠️ Capacidade excedida!\n\n` +
+        `A suíte "${suite.name}" comporta até ${suite.capacity} hóspede(s), ` +
+        `mas você está tentando registrar ${guests} hóspede(s).\n\n` +
+        `Deseja salvar a reserva mesmo assim?`
+      );
+      if(!continuar) return;
+    }
+
+    // Alerta de overbooking
     const conflict = checkOverbooking(suiteId, checkIn, checkOut, editingId);
     if(conflict !== null){
       const cs = getSuite(suiteId);
@@ -946,7 +960,17 @@
     const price = getSuitePrice(suiteId);
     const nights = diffDays(checkIn, checkOut);
     const total = price * nights;
-    const dados = { guestName: guest, checkIn: checkIn, checkOut: checkOut, suiteId: suiteId, guests: guests, reservationNumber: num, channel: channel, notes: notes, total: total };
+    const dados = { 
+      guestName: guest, 
+      checkIn: checkIn, 
+      checkOut: checkOut, 
+      suiteId: suiteId, 
+      guests: guests, 
+      reservationNumber: num, 
+      channel: channel, 
+      notes: notes, 
+      total: total 
+    };
 
     if(editingId){
       for(let i=0;i<reservas.length;i++){
@@ -956,7 +980,10 @@
         }
       }
     } else {
-      reservas.push(Object.assign({ id: 'r' + Date.now() + Math.random().toString(36).slice(2,7), createdAt: new Date().toISOString() }, dados));
+      reservas.push(Object.assign({ 
+        id: 'r' + Date.now() + Math.random().toString(36).slice(2,7), 
+        createdAt: new Date().toISOString() 
+      }, dados));
     }
     save();
     $('formModal').classList.remove('open');
